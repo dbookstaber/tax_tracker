@@ -1,0 +1,12 @@
+# Ignore compiled Python files
+__pycache__/
+tests/__pycache__/
+tax_tracker/__pycache__/
+*.py[cod]
+
+lib/*
+
+.coverage
+cov.xml
+coverage.xml
+test.ipynb

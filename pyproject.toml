@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "TaxTracker"
+version = "0.1.0"
+description = "A Python module for tracking and calculating the tax treatment of trades and distributions."
+readme = "README.md"
+license = {text = "Prosperity Public License"}
+authors = [
+    {name = "David Bookstaber", email = "david@bookstaber.com"}
+]
+homepage = "https://github.com/dbookstaber/tax_tracker"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: Other/Proprietary License",
+    "Operating System :: OS Independent"
+]
+
+[project.dependencies]
+pandas = ">=2.0.0"

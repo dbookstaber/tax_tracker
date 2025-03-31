@@ -10,6 +10,12 @@ TaxTracker is a Python module designed to calculate the United States federal ta
 - **Detailed Reporting**: Generates both summaries and details of tax lot activity and cashflows.
 - **Compliance with IRS Rules**: Implements tax rules as described in [IRS Publication 550 (2024)](https://www.irs.gov/publications/p550).
 
+## Limitations
+
+- This is done to the best of our ability to understand/interpret [IRS Publication 550](https://www.irs.gov/pub/irs-pdf/p550.pdf).
+- This does not handle accounting of derivatives or other assets with special tax treatment.
+- This does not look for, or account for, "substantially identical" assets.  If you enter trades for asset `XYZ`, and also for `XYZ.B`, it treats them as separate even if the IRS might consider them "substantially identical."
+
 ## Installation
 
 Clone the repository to your local machine:
@@ -27,16 +33,16 @@ pip install -r requirements.txt
 
 ## Documentation
 
-[The code contains detailed in-line documentation](tax_tracker/tax_tracker.py).
+[The code contains detailed in-line documentation](tax_tracker/tax_tracker.py), which has been PDoc'd in [/docs](/docs).
 
-[Examples.ipynb](Examples.ipynb) provides detailed examples of each of the tracker classes:
+[Examples.ipynb](Examples.ipynb) provides many annotated examples of each of the tracker classes:
 * CapGainsTracker
 * DistributionTracker
 * PNLtracker
 
 ## Usage
 
-### Example: Tracking Trades and Calculating Capital Gains
+### Example: Capital Gains
 
 ```python
 import pandas as pd
@@ -59,7 +65,7 @@ print('\nClosed Lots:\n' + tracker.closed_lots_str)
 print('\nCapital Gains:\n' + str(tracker.capital_gains_df))
 ```
 
-### Example: Handling Distributions
+### Example: Distributions
 
 ```python
 import pandas as pd
@@ -69,7 +75,7 @@ from tax_tracker import DistributionTracker
 distribution_data = pd.DataFrame({
     'Ticker': ['ABC', 'ABC', 'ABC'],
     'Date': [pd.Timestamp('2023-02-01'), pd.Timestamp('2023-03-01'), pd.Timestamp('2023-03-15')],
-    'Type': ['D', 'R', 'P'],
+    'Type': ['Dividend', 'Return of Capital', 'Preferred Dividend'],
     'Distribution': [0.22, 0.15, 0.30]
 }).set_index(['Ticker', 'Date', 'Type'])
 
@@ -86,7 +92,7 @@ tracker.run_beginning_of_day(pd.Timestamp('2023-04-01'))
 print(tracker.dividends_df)
 ```
 
-### Example: Calculating Daily P&L and NAV
+### Example: Daily P&L and NAV
 
 ```python
 import pandas as pd
@@ -107,7 +113,6 @@ tracker.trade(pd.Timestamp('2025-03-03'), 'XYZ', 100, 15.1)
 tracker.trade(pd.Timestamp('2025-03-05'), 'XYZ', -50, 16.9)
 
 # Carry trade through March 7
-tracker.run_beginning_of_day(pd.Timestamp('2025-03-07'))
 tracker.run_end_of_day(pd.Timestamp('2025-03-07'))
 
 # View daily P&L and NAV

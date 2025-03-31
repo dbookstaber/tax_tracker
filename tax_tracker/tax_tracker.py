@@ -13,8 +13,8 @@ Classes:
     PNLtracker: Extends DistributionTracker to calculate daily P&L and NAV.
 
 Constants:
-    LONG_TERM_HOLDING_PERIOD: Minimum holding period (in days) for a gain to qualify as long-term.
-    PIL_CONVERSION_PERIOD: Holding period (in days) after which payments-in-lieu (PIL) become interest expenses.
+    LONG_TERM_HOLDING_PERIOD: Minimum holding period (in days) for realized P&L to qualify as long-term.
+    PIL_CONVERSION_PERIOD: Holding period (in days) after which payments-in-lieu become interest expenses.
     PREFERRED_QUALIFIED_WINDOW: Qualification window (in days) for preferred dividends.
     QUALIFIED_WINDOW: Qualification window (in days) for regular dividends.
     WASH_SALE_WINDOW: Window (in days) to check for wash sales before and after a sale.
@@ -26,7 +26,7 @@ It provides detailed accounting and reporting to follow the tax implications of 
 """
 
 __all__ = ('Config', 'Lot', 'CapGainsTracker', 'DistributionTracker', 'PNLtracker')
-__version__ = '0.1.0'
+__version__ = '0.1.1'
 __author__ = 'David Bookstaber'
 
 import math
@@ -795,10 +795,10 @@ class DistributionTracker(CapGainsTracker):
         Raises:
             AssertionError: If the method is called with a date that is not later than the last BoD date.
         """
-        assert self._last_BoD == date, \
-            f"In EoD: BoD was not called for {date}"
         assert (not self._last_EoD) or date > self._last_EoD, \
             f"EoD called {date} with last EoD={self._last_EoD}"
+        if (not self._last_BoD) or (self._last_BoD != date):
+            self.BoD(date)
         self._last_EoD = date
 
         for ticker, positions in self.positions.items():

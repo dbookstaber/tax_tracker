@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "TaxTracker"
-version = "0.1.0"
+version = "0.1.1"
 description = "A Python module for tracking and calculating the tax treatment of trades and distributions."
 readme = "README.md"
 license = {text = "Prosperity Public License"}

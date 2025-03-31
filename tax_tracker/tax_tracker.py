@@ -13,8 +13,8 @@ Classes:
     PNLtracker: Extends DistributionTracker to calculate daily P&L and NAV.
 
 Constants:
-    LONG_TERM_HOLDING_PERIOD: Minimum holding period (in days) for realized P&L to qualify as long-term.
-    PIL_CONVERSION_PERIOD: Holding period (in days) after which payments-in-lieu become interest expenses.
+    LONG_TERM_HOLDING_PERIOD: Minimum holding days for realized P&L to qualify as long-term.
+    PIL_CONVERSION_PERIOD: Holding days after which payments-in-lieu become interest expenses.
     PREFERRED_QUALIFIED_WINDOW: Qualification window (in days) for preferred dividends.
     QUALIFIED_WINDOW: Qualification window (in days) for regular dividends.
     WASH_SALE_WINDOW: Window (in days) to check for wash sales before and after a sale.
@@ -39,10 +39,10 @@ warnings.filterwarnings('once', category=UserWarning)  # Doesn't yet work for Ju
 # pylint: disable=invalid-name,line-too-long,pointless-string-statement
 
 LONG_TERM_HOLDING_PERIOD = 366  # Minimum number of holding days for a gain to qualify as long-term
-PIL_CONVERSION_PERIOD = 45  # Number of holding days after which payments-in-lieu (PIL) become interest expense
-PREFERRED_QUALIFIED_WINDOW = 90  # Number of days before and after a preferred dividend to check for qualification
-QUALIFIED_WINDOW = 60  # Number of days before and after a dividend to check for qualification
-WASH_SALE_WINDOW = 30  # Number of days before and after a sale to check for wash sales
+PIL_CONVERSION_PERIOD = 45  # Holding days after which payments-in-lieu (PIL) become interest expense
+PREFERRED_QUALIFIED_WINDOW = 90  # Days before and after a preferred dividend to check for qualification
+QUALIFIED_WINDOW = 60  # Days before and after a dividend to check for qualification
+WASH_SALE_WINDOW = 30  # Days before and after a sale to check for wash sales
 
 class Config:
     """Settings for tax_trackers.

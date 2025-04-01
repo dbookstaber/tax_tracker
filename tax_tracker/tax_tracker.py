@@ -1,4 +1,5 @@
 """Tax Trackers calculate tax treatment of trades and distributions.
+This version adds details to enable tracing of splits and washes from Lot to Lot.
 
 This module provides classes for tracking and calculating the tax treatment of trades and distributions.
 It includes functionality for handling capital gains, wash sales, and distributions (like dividends).
@@ -34,7 +35,8 @@ import warnings
 from collections import deque, defaultdict
 from enum import Enum
 from dataclasses import dataclass, field
-from typing import Optional, DefaultDict, Dict, Deque, List, Set, Tuple
+from typing import Optional, ClassVar, DefaultDict, Dict, Deque, List, Set, Tuple
+import networkx as nx
 import pandas as pd
 warnings.filterwarnings('once', category=UserWarning)  # Doesn't yet work for Jupyter
 # pylint: disable=invalid-name,line-too-long,pointless-string-statement
@@ -94,7 +96,16 @@ class Lot:
         distributions (float): Total distributions received on this lot, in dollars.
         payment_in_lieu (DefaultDict[pd.Timestamp, float]): Payments-in-lieu (PIL) made on short positions
             held <= 45 days by DistributionTrackers, recorded in $/share, indexed by date of distribution.
-    """
+        lot_id (int): A unique identifier for this lot.
+    """    
+    _id_counter: ClassVar[int] = 1         # Class-level counter for unique IDs
+    _all: ClassVar[Dict[int, 'Lot']] = {}  # All lots created, indexed by lot_id
+    @classmethod
+    def reset_class_variables(cls):
+        """Class-level method to reset class-level variables"""
+        cls._id_counter = 1
+        cls._all.clear()
+
     ticker: str
     shares: float
     open_date: pd.Timestamp
@@ -106,6 +117,21 @@ class Lot:
     washed: bool = False
     distributions: float = .0
     payment_in_lieu: DefaultDict[pd.Timestamp, float] = field(default_factory=lambda: defaultdict(float))
+    #region Tracing variables
+    lot_id: int = field(init=False)  # Unique identifier for each lot
+    split_from_id: Optional[int] = None  # ID of the lot from which this lot was split
+    split_to_ids: List[int] = field(default_factory=list)  # IDs of lots that were split from this lot
+    basis_from_ids: List[int] = field(default_factory=list)  # IDs of lots that were used to adjust this lot's basis
+    basis_to_ids: List[int] = field(default_factory=list)  # IDs of lots that received this lot's (washed) basis
+    original_shares: float = field(init=False)  # Original number of shares in the lot
+    #endregion
+
+    def __post_init__(self):
+        """Initialize the unique identifier for the lot."""
+        self.lot_id = Lot._id_counter
+        Lot._id_counter += 1
+        Lot._all[self.lot_id] = self  # Add this lot to the class-level dictionary
+        self.original_shares = self.shares
 
     def split(self, split_shares: float) -> 'Lot':
         """Split this into two lots, keeping (`self.shares - split_shares`) in the original lot.
@@ -124,8 +150,109 @@ class Lot:
         self.distributions -= split_dists
         split_lot = Lot(self.ticker, split_shares, self.open_date, self.open_px, self.close_px,
                         self.close_date, split_basis, self.basis_days, self.washed, split_dists,
-                        self.payment_in_lieu.copy())
+                        self.payment_in_lieu.copy(), basis_from_ids=self.basis_from_ids.copy())
+        split_lot.split_from_id = self.lot_id
+        self.split_to_ids.append(split_lot.lot_id)
         return split_lot
+
+    #region Trace methods
+    def status(self) -> str:
+        if self.is_open:
+            return 'Open'
+        if self.tax_gain > 0:
+            return 'Gain'
+        return 'Loss'
+
+    def to_digraph(self) -> nx.DiGraph:
+        """Create a directed graph of splits and washes of the lot.
+
+        Returns:
+            nx.DiGraph: A directed graph with edges representing splits and basis transfers.
+        """
+        g = nx.DiGraph()
+        g.add_node(self.lot_id,
+                   label=(self.graph_open_str if self.is_open else self.graph_closed_str),
+                   status=self.status(), lot_id=self.lot_id)
+        for i in self.split_to_ids:
+            g.add_edge(self.lot_id, i, label='Split')
+            g = nx.compose(g, Lot._all[i].to_digraph())
+        for i in self.basis_to_ids:
+            g.add_edge(self.lot_id, i, label='Basis')
+            g = nx.compose(g, Lot._all[i].to_digraph())
+        return g
+
+    def reverse_digraph(self) -> nx.DiGraph:
+        """Create a directed graph to show any splits or washes leading to this lot.
+
+        Returns:
+            nx.DiGraph: A directed graph with edges representing splits and basis transfers.
+        """
+        g = nx.DiGraph()
+        g.add_node(self.lot_id,
+                   label=(self.graph_open_str if self.is_open else self.graph_closed_str),
+                   status=self.status(), lot_id=self.lot_id)
+        if self.split_from_id:
+            lot = Lot._all[self.split_from_id]
+            #g.add_node(lot.lot_id, label=str(lot), is_open=lot.is_open, lot_id=lot.lot_id, hover_text=str(lot.lot_id))
+            g.add_edge(lot.lot_id, self.lot_id, label='Split')
+            g = nx.compose(g, lot.reverse_digraph())
+        for i in self.basis_from_ids:
+            lot = Lot._all[i]
+            g.add_edge(i, self.lot_id, label='Basis')
+            g = nx.compose(g, Lot._all[i].reverse_digraph())
+        return g
+
+    def display_shares(self, digits: int = 0) -> str:
+        def decimal_places_needed(value: float) -> int:
+            if value == 0:
+                return 0  # No decimal places needed for zero
+            value = abs(value)  # Work with the absolute value
+            decimal_places = digits
+            while value < 1:
+                value *= 10
+                decimal_places += 1
+            return decimal_places
+        return f'{self.original_shares:.{decimal_places_needed(self.original_shares)}f}'
+
+    @property
+    def graph_open_str(self) -> str:
+        """Return a string representation of the directed graph.
+
+        Returns:
+            str: A string representation of the directed graph.
+        """
+        return f'Lot#{self.lot_id}\n' + self.display_shares(1) + f' @ ${self.open_px:.2f}' + \
+               f'\n({self.open_date.strftime("%Y-%m-%d")}' + (')' if self.is_open else f' : {self.close_date.strftime("%Y-%m-%d")})') + \
+               (f'\nBasis ${self.basis_add:+.2f}' if self.basis_add else '') + \
+               (f'\nterm+{self.basis_days} day{"s" if self.basis_days > 1 else ""}' if self.basis_days else '')
+
+    @property
+    def graph_closed_str(self) -> str:
+        """Return a string representation of the directed graph.
+
+        Returns:
+            str: A string representation of the directed graph.
+        """
+        return f'Lot#{self.lot_id}\n' + self.display_shares(1) + f' @ ${self.open_px:.2f} - {self.close_px:.2f}' + \
+               f'\n{self.open_date.strftime("%Y-%m-%d")}' + ('' if self.is_open else f' : {self.close_date.strftime("%Y-%m-%d")}') + \
+               (f'\nBasis ${self.basis_add:+.2f}' if self.basis_add else '') + \
+               (f'\nterm+{self.basis_days} day{"s" if self.basis_days > 1 else ""}' if self.basis_days else '') + \
+                f'\n${self.tax_gain:.2f} {self.gain_type}' + \
+                f' ({self.duration}{"+"+str(self.basis_days) if self.basis_days > 0 else ""} ' + \
+                    f'day{"s" if self.term > 1 else ""})'
+
+    @property
+    def edges(self) -> Dict[Tuple[int, int], str]:
+        """Return a dictionary of edges in the lot.
+
+        Returns:
+            Dict[Tuple[int, int], str]: A dictionary with keys as tuples of lot IDs and values as strings.
+        """
+        d: Dict[Tuple[int, int], str] = {}
+        for i in self.split_to_ids:
+            d[(self.lot_id, i)] = 'Split'
+        return d
+    #endregion
 
     @property
     def is_open(self) -> bool:
@@ -218,7 +345,8 @@ class Lot:
         Returns:
             str: A description of the open lot.
         """
-        return Lot.no_trailing_zeros(self.shares) + f' @ ${self.open_px:.2f} ' + \
+        return f'{self.lot_id:3} {self.ticker}: ' + \
+               Lot.no_trailing_zeros(self.shares) + f' @ ${self.open_px:.2f} ' + \
                f'({self.open_date.strftime("%Y-%m-%d")}) ' + \
                (f' Basis ${self.basis_add:+.2f}' if self.basis_add else '') + \
                (f' term+{self.basis_days} day{"s" if self.basis_days > 1 else ""}' if self.basis_days else '') + \
@@ -231,7 +359,7 @@ class Lot:
         Returns:
             str: A description of the closed lot.
         """
-        return f'{self.ticker}: ' \
+        return f'{self.lot_id:3} {self.ticker}: ' \
             f'{self.open_date.strftime("%Y-%m-%d")} ' + Lot.no_trailing_zeros(self.shares) + \
             f' @ ${self.open_px:.2f} ' + \
             f'>> {self.close_date.strftime("%Y-%m-%d")} ' + Lot.no_trailing_zeros(-self.shares) + \
@@ -382,7 +510,8 @@ class CapGainsTracker:
         side = self.sign(shares)
         loss_trades = self.loss_longs if (side > 0) else self.loss_shorts
         while ticker in loss_trades and loss_trades[ticker] and abs(shares) > Config.MIN_SHARE_SIZE:
-            loss_trade = loss_trades[ticker].pop()
+            loss_trade = loss_trades[ticker].pop()  # DEBUGGING: Can we make this LIFO?  Logic assumes we'll pop the oldest trade first, and then if it's outside the window just move on.  This won't work if we pop the newest trade first.
+            #loss_trade = loss_trades[ticker].pop()
             if (date - loss_trade.close_date).days <= WASH_SALE_WINDOW:
                 # This loss_trade washes a capital loss
                 washed_loss = loss_trade.tax_gain
@@ -404,7 +533,10 @@ class CapGainsTracker:
                 # Reverse the wash trade
                 self.capital_gains[loss_trade.close_date][loss_trade.gain_type_verbose] -= washed_loss
                 # Buy the washed_quantity, but account for the washed trade's loss and effective purchase date
-                new_lots.append(Lot(ticker, washed_quantity, date, price, basis_add=washed_loss, basis_days=loss_trade.term))
+                new_lot = Lot(ticker, washed_quantity, date, price, basis_add=washed_loss, basis_days=loss_trade.term)
+                new_lot.basis_from_ids.append(loss_trade.lot_id)  # Add the washed loss to the basis of the new lot
+                loss_trade.basis_to_ids.append(new_lot.lot_id)  # Add the new lot to the basis of the washed loss
+                new_lots.append(new_lot)
                 shares -= washed_quantity
                 self.wash_trades.append(WashLoss(loss_trade, date, washed_quantity, washed_loss))
         if abs(shares) > Config.MIN_SHARE_SIZE:
@@ -477,6 +609,8 @@ class CapGainsTracker:
                             washed_position = open_position.split(washable_shares)
                             washed_position.basis_add += gain
                             washed_position.basis_days += closing_lot.term
+                            washed_position.basis_from_ids.append(closing_lot.lot_id)  # Add the washed loss to the basis of the new lot
+                            closing_lot.basis_to_ids.append(washed_position.lot_id)  # Add the new lot to the basis of the washed loss
                             # Create a new Lot for the washed quantity
                             self.positions[ticker].append(washed_position)
                             new_lots.append(washed_position)
@@ -488,6 +622,8 @@ class CapGainsTracker:
                             washed_proportion = open_position.shares / washable_shares
                             open_position.basis_add += gain * washed_proportion
                             open_position.basis_days += closing_lot.term
+                            open_position.basis_from_ids.append(closing_lot.lot_id)  # Add the washed loss to the basis of the new lot
+                            closing_lot.basis_to_ids.append(open_position.lot_id)  # Add the new lot to the basis of the washed loss
                             washed_shares += open_position.shares
                             washed_gain += washed_proportion * gain
                             washable_shares -= open_position.shares
@@ -600,9 +736,7 @@ class CapGainsTracker:
         Returns:
             str: A string summarizing open positions.
         """
-        return '\n'.join([f'{ticker}: {position}'
-                          for ticker, positions in self.positions.items()
-                          for position in positions] or ['No positions'])
+        return '\n'.join([str(position) for position in self.open_lots_list] or ['No positions'])
 
     @property
     def open_lots_list(self) -> List[Lot]:

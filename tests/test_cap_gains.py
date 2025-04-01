@@ -3,7 +3,7 @@ import warnings
 from typing import Callable
 import pytest
 import pandas as pd
-from tax_tracker import CapGainsTracker, DistributionTracker, PNLtracker
+from tax_tracker import Config, TaxLotSelection, CapGainsTracker, DistributionTracker, PNLtracker
 
 @pytest.mark.usefixtures("distribution_data", "price_data")
 class TestCapGains:
@@ -36,6 +36,7 @@ class TestCapGains:
         self.prior_purchase_wash(tracker_class)
         self.prior_purchase_partial_wash(tracker_class)
         self.prior_short_partial_wash(tracker_class)
+        self.lot_selection(tracker_class)
 
     def wash_loss_sequence(self, tracker_class: Callable[[], CapGainsTracker]):
         """Test wash loss logic.  Ref Example 1.1"""
@@ -323,6 +324,34 @@ class TestCapGains:
         tracker.validate()
         assert tracker.capital_gains_df.sum().sum() == 0, "All losses washed"
         assert tracker.get_position('XYZ') == -70, "Net position"
+
+    def lot_selection(self, tracker_class: Callable[[], CapGainsTracker]):
+        """Test different lot selection methods.  Ref Example 1.8"""
+        def trade_sequence(tracker) -> pd.DataFrame:
+            tracker.trade(pd.Timestamp('2024-01-15'), 'XYZ', 50, price=10)
+            tracker.trade(pd.Timestamp('2024-01-30'), 'XYZ', 50, price=20)
+            tracker.trade(pd.Timestamp('2024-02-17'), 'XYZ', 50, price=16)
+            tracker.trade(pd.Timestamp('2024-02-27'), 'XYZ', 50, price=12)
+            tracker.trade(pd.Timestamp('2025-01-20'), 'XYZ', -50, price=15)
+            tracker.trade(pd.Timestamp('2025-01-25'), 'XYZ', -50, price=15)
+            tracker.trade(pd.Timestamp('2025-02-25'), 'XYZ', -100, price=15)
+            return tracker.capital_gains_df
+        Config.LOT_SELECTION = TaxLotSelection.FIFO
+        cg = trade_sequence(tracker_class())
+        assert cg.sum()['ShortTerm'] == -100, "FIFO -$100 ST"
+        assert cg.sum()['LongTerm'] == 200, "FIFO $200 LT"
+        Config.LOT_SELECTION = TaxLotSelection.LIFO
+        cg = trade_sequence(tracker_class())
+        assert cg.sum()['ShortTerm'] == 100, "LIFO $100 ST"
+        assert cg.sum()['LongTerm'] == 0, "LIFO $0 LT"
+        Config.LOT_SELECTION = TaxLotSelection.HIFO
+        cg = trade_sequence(tracker_class())
+        assert cg.sum()['ShortTerm'] == -150, "HIFO -$150 ST"
+        assert cg.sum()['LongTerm'] == 250, "HIFO $250 LT"
+        Config.LOT_SELECTION = TaxLotSelection.LOFO
+        cg = trade_sequence(tracker_class())
+        assert cg.sum()['ShortTerm'] == 150, "LOFO $150 ST"
+        assert cg.sum()['LongTerm'] == -50, "LOFO -$50 LT"
 
 
 if __name__ == '__main__':

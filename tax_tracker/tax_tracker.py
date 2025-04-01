@@ -25,13 +25,14 @@ as described by IRS Publication 550 (2024 version) at https://www.irs.gov/public
 It provides detailed accounting and reporting to follow the tax implications of trades and distributions.
 """
 
-__all__ = ('Config', 'Lot', 'CapGainsTracker', 'DistributionTracker', 'PNLtracker')
-__version__ = '0.1.1'
+__all__ = ('Config', 'Lot', 'TaxLotSelection', 'CapGainsTracker', 'DistributionTracker', 'PNLtracker')
+__version__ = '0.1.2'
 __author__ = 'David Bookstaber'
 
 import math
 import warnings
 from collections import deque, defaultdict
+from enum import Enum
 from dataclasses import dataclass, field
 from typing import Optional, DefaultDict, Dict, Deque, List, Set, Tuple
 import pandas as pd
@@ -44,6 +45,22 @@ PREFERRED_QUALIFIED_WINDOW = 90  # Days before and after a preferred dividend to
 QUALIFIED_WINDOW = 60  # Days before and after a dividend to check for qualification
 WASH_SALE_WINDOW = 30  # Days before and after a sale to check for wash sales
 
+
+class TaxLotSelection(Enum):
+    """Tax lot selection methods for closing positions.
+
+    Attributes:
+        FIFO (str): First In, First Out.
+        LIFO (str): Last In, First Out.
+        HIFO (str): Highest In, First Out.
+        LOFO (str): Lowest In, First Out.
+    """
+    FIFO = 'FIFO'
+    LIFO = 'LIFO'
+    HIFO = 'HIFO'
+    LOFO = 'LOFO'
+
+
 class Config:
     """Settings for tax_trackers.
 
@@ -53,6 +70,7 @@ class Config:
     """
     SHARE_PRECISION = 4
     MIN_SHARE_SIZE = 0.0001
+    LOT_SELECTION = TaxLotSelection.FIFO  # FIFO, LIFO, HIFO, LOFO
 
 
 @dataclass
@@ -413,13 +431,28 @@ class CapGainsTracker:
         closed_lots = []
         side = -self.sign(shares)  # Side of existing position (which we are trading to close)
         while abs(shares) > Config.MIN_SHARE_SIZE and self.positions[ticker]:
-            closing_lot = self.positions[ticker].popleft()
+            if Config.LOT_SELECTION == TaxLotSelection.FIFO:
+                closing_lot_index = 0
+                closing_lot = self.positions[ticker].popleft()
+            elif Config.LOT_SELECTION == TaxLotSelection.LIFO:
+                closing_lot_index = -1
+                closing_lot = self.positions[ticker].pop()
+            elif Config.LOT_SELECTION == TaxLotSelection.HIFO:
+                closing_lot = max(self.positions[ticker], key=lambda lot: lot.open_px)
+                closing_lot_index = self.positions[ticker].index(closing_lot)
+                self.positions[ticker].remove(closing_lot)
+            elif Config.LOT_SELECTION == TaxLotSelection.LOFO:
+                closing_lot = min(self.positions[ticker], key=lambda lot: lot.open_px)
+                closing_lot_index = self.positions[ticker].index(closing_lot)
+                self.positions[ticker].remove(closing_lot)
+            else:
+                raise NotImplementedError(f"LOT_SELECTION method '{Config.LOT_SELECTION}' has not been implemented.")
             if (-side*shares + Config.MIN_SHARE_SIZE) < (side*closing_lot.shares):
                 # Partial close: Put unclosed quantity back in positions, pro-rating capital gains
                 unclosed_position = closing_lot.split(closing_lot.shares + shares)
                 if abs(unclosed_position.shares) > Config.MIN_SHARE_SIZE:
                     new_lots.append(unclosed_position)
-                    self.positions[ticker].appendleft(unclosed_position)
+                    self.positions[ticker].insert(closing_lot_index, unclosed_position)
             closing_lot.close_px = price
             closing_lot.close_date = date
             closed_lots.append(closing_lot)
@@ -435,7 +468,8 @@ class CapGainsTracker:
                         break
                     # Find opening trades in this ticker in the last WASH_SALE_WINDOW days, made on days other than this trade's date:
                     if (open_position.open_date != closing_lot.open_date) and (date - open_position.open_date).days <= WASH_SALE_WINDOW:
-                        assert self.sign(open_position.shares) == self.sign(closing_lot.shares), 'Washing opening trades must be same side'
+                        assert self.sign(open_position.shares) == self.sign(closing_lot.shares), \
+                                'Washing opening trades must be same side'
                         # This open washes the loss on current close; we have to adjust the opening trade's basis
                         if (Config.MIN_SHARE_SIZE + abs(washable_shares)) < abs(open_position.shares):
                             # We have to split the opening trade as it is only partially washed

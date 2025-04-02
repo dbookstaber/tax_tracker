@@ -3,7 +3,7 @@ __pycache__/
 tests/__pycache__/
 tax_tracker/__pycache__/
 *.py[cod]
-
+*.egg-info/
 lib/*
 
 .coverage

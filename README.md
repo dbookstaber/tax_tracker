@@ -4,7 +4,7 @@ TaxTracker is a Python module designed to calculate the United States federal ta
 
 ## Features
 
-- **Capital Gains Tracking**: Tracks gains and losses from trading activity, applying FIFO accounting and wash sale rules.
+- **Capital Gains Tracking**: Characterizes capital gains and losses from trading activity, applying wash sale rules.
 - **Dividend Qualification**: Handles dividend qualification rules for regular and preferred dividends.
 - **Daily P&L and NAV Calculation**: Given price data, it can compute daily P&L and NAV of a portfolio.
 - **Detailed Reporting**: Generates both summaries and details of tax lot activity and cashflows.

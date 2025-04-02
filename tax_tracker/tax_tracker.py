@@ -6,6 +6,7 @@ Given price data, PNLtracker can calculate daily profit and loss (P&L, a.k.a. PN
 
 Classes:
     Config: Configuration settings for tax trackers.
+    TaxLotSelection: Enum for tax lot selection methods (FIFO, LIFO, HIFO, LOFO).
     Lot: A tax lot, tracking trading activity for specific shares of a specific asset.
     WashLoss: Details a closed Lot with a washed loss.
     CapGainsTracker: Tracks capital gains and wash sales for trading activity.
@@ -20,8 +21,7 @@ Constants:
     WASH_SALE_WINDOW: Window (in days) to check for wash sales before and after a sale.
 
 This module is designed to handle complex tax scenarios resulting from trading assets long and short.
-It assumes FIFO for tax lots.  It applies wash sale and dividend qualification rules, based on U.S. law
-as described by IRS Publication 550 (2024 version) at https://www.irs.gov/publications/p550.
+It applies wash sale and dividend qualification rules, as described by IRS Publication 550 (2024 version).
 It provides detailed accounting and reporting to follow the tax implications of trades and distributions.
 """
 
@@ -47,18 +47,11 @@ WASH_SALE_WINDOW = 30  # Days before and after a sale to check for wash sales
 
 
 class TaxLotSelection(Enum):
-    """Tax lot selection methods for closing positions.
-
-    Attributes:
-        FIFO (str): First In, First Out.
-        LIFO (str): Last In, First Out.
-        HIFO (str): Highest In, First Out.
-        LOFO (str): Lowest In, First Out.
-    """
-    FIFO = 'FIFO'
-    LIFO = 'LIFO'
-    HIFO = 'HIFO'
-    LOFO = 'LOFO'
+    """Tax lot selection methods for closing positions."""
+    FIFO = 'First In, First Out'
+    LIFO = 'Last In, First Out'
+    HIFO = 'Highest In, First Out'
+    LOFO = 'Lowest In, First Out'
 
 
 class Config:
@@ -67,10 +60,11 @@ class Config:
     Attributes:
         SHARE_PRECISION (int): Maximum number of decimal places to use for shares; -1 for no limit.
         MIN_SHARE_SIZE (float): Minimum share size to create a lot. Smaller lots are disregarded.
+        LOT_SELECTION (TaxLotSelection): Tax lot selection method for closing positions.
     """
-    SHARE_PRECISION = 4
-    MIN_SHARE_SIZE = 0.0001
-    LOT_SELECTION = TaxLotSelection.FIFO  # FIFO, LIFO, HIFO, LOFO
+    SHARE_PRECISION: int = 4
+    MIN_SHARE_SIZE: float = 0.0001
+    LOT_SELECTION: TaxLotSelection = TaxLotSelection.FIFO
 
 
 @dataclass
@@ -111,10 +105,10 @@ class Lot:
         """Split this into two lots, keeping (`self.shares - split_shares`) in the original lot.
 
         Args:
-            split_shares (float): The number of shares to split off into a new lot.
+            split_shares (float): The number of shares to move into a new lot.
 
         Returns:
-            Lot: The split-off lot containing `split_shares` of the original's shares, basis, and P&L.
+            Lot: The new split-off lot.
         """
         proportion = abs(split_shares / self.shares)
         split_basis = self.basis_add * proportion
@@ -291,9 +285,7 @@ class WashLoss:
 
 
 class CapGainsTracker:
-    """Computes capital gains from trading activity, accounting for wash sale rule,
-    and characterizing gains as Short- or Long-term.  Assumes FIFO accounting.
-    Keeps track of open positions, closed trades, wash sales, and capital gains.
+    """Computes capital gains from trading activity, accounting for wash sale rule.
     Trades must be entered in chronological date order.  (Trade order on same day is irrelevant.)
 
     Attributes:

@@ -26,7 +26,7 @@ It provides detailed accounting and reporting to follow the tax implications of 
 """
 
 __all__ = ('Config', 'Lot', 'TaxLotSelection', 'CapGainsTracker', 'DistributionTracker', 'PNLtracker')
-__version__ = '0.1.2'
+__version__ = '0.1.3'
 __author__ = 'David Bookstaber'
 
 import math
@@ -35,6 +35,7 @@ from collections import deque, defaultdict
 from enum import Enum
 from dataclasses import dataclass, field
 from typing import Optional, DefaultDict, Dict, Deque, List, Set, Tuple
+import numpy as np
 import pandas as pd
 warnings.filterwarnings('once', category=UserWarning)  # Doesn't yet work for Jupyter
 # pylint: disable=invalid-name,line-too-long,pointless-string-statement
@@ -724,7 +725,7 @@ class DistributionTracker(CapGainsTracker):
             self.BoD(date)
 
         new_lots, closed_lots = super().trade(date, ticker, shares, price)
-        
+
         # If we created a Lot with pending PIL, add it to the list
         for trade in new_lots:
             if trade.payment_in_lieu:
@@ -805,10 +806,13 @@ class DistributionTracker(CapGainsTracker):
         Returns:
             float: The number of shares that were held for at least `period`+1 days and not already qualified.
         """
-        q = self.holdings.shift().loc[(exdate - pd.Timedelta(days=period)):(exdate + pd.Timedelta(days=period)),
-                                      ticker].fillna(0).nlargest(period+1)
-        if len(q) < period+1:
+        date_range = (exdate - pd.Timedelta(days=period), exdate + pd.Timedelta(days=period))
+        # Shift 1 day because IRS specifies opening date doesn't count, but any closing date does
+        this = self.holdings[ticker].shift(fill_value=.0)
+        sub = this[date_range[0]:date_range[1]]
+        if len(sub) < period+1:
             return 0
+        q = np.partition(sub, -period-1)[-period-1:]
         return q.min() - self.already_qualified[(exdate, ticker)]
 
     def EoD(self, date: pd.Timestamp):
@@ -831,7 +835,7 @@ class DistributionTracker(CapGainsTracker):
             shares = sum(position.shares for position in positions)
             if ticker not in self.holdings.columns:
                 self.holdings[ticker] = .0
-            self.holdings.loc[date, ticker] = shares
+            self.holdings.at[date, ticker] = shares
     run_end_of_day = EoD  # Alias that complies with method naming convention
 
     def get_eod_shares(self, date: pd.Timestamp, ticker: str) -> float:
@@ -848,7 +852,7 @@ class DistributionTracker(CapGainsTracker):
             return .0
         if ticker not in self.holdings.columns:
             return .0
-        return self.holdings.loc[date, ticker]
+        return self.holdings.at[date, ticker]
 
     def BoD(self, date: pd.Timestamp) -> Dict[str, float]:
         """Beginning of Day (BoD) processing for a given date. This method must be called before 
@@ -1135,21 +1139,21 @@ class PNLtracker(DistributionTracker):
         Args:
             date (pd.Timestamp): The date for which to get the price.
             ticker (str): The asset ticker symbol.
-            fill (bool): Whether to return the last price available prior to the date if no price is listed. Defaults to False.
+            fill (bool): Whether to return the last price available prior to the date
+                         if no price is listed for the requested date. Defaults to False.
 
         Returns:
             Optional[float]: The price of the ticker on the date, or None if no price is available.
         """
-        if ticker not in self.data.index.get_level_values('Ticker'):
-            if ticker not in self.warned_no_price:
-                self.warned_no_price.add(ticker)
-                warnings.warn(f"No price data for {ticker}")
-            return None
-        if date not in self.data.loc[ticker].index:
+        try:
+            return self.data.at[(ticker, date), 'Px']  # Consider optimizing a dataframe for this
+        except KeyError:
             if fill:
-                return float(self.data.loc[ticker].Px.asof(date))
+                try:
+                    return float(self.data.loc[ticker].Px.asof(date))
+                except KeyError:
+                    pass
             return None
-        return pd.to_numeric(self.data.loc[(ticker, date), 'Px'], errors='coerce', downcast='float')
 
     def trade(self, date: pd.Timestamp, ticker: str, shares: float, price: Optional[float] = None) -> Tuple[List[Lot], List[Lot]]:
         """Record a trade. If price is not specified, use the closing price for the date.
@@ -1168,7 +1172,8 @@ class PNLtracker(DistributionTracker):
         """
         if price is None:
             price = self.get_price(date, ticker, fill=True)
-        assert price is not None, f"Price for {ticker} on {date} is not available."
+        if price is None:
+            raise ValueError(f"No price for {ticker} on {date}.")
 
         # Increment counter if there are no current positions in this ticker:
         if not self.positions[ticker]:
@@ -1206,7 +1211,8 @@ class PNLtracker(DistributionTracker):
         """
         if price is None:
             price = self.get_price(date, ticker, fill=True)
-        assert price is not None, f"Price for {ticker} on {date} is not available."
+        if price is None:
+            raise ValueError(f"No price for {ticker} on {date}.")
         shares = dollars / price
         return self.trade(date, ticker, shares, price)
 
@@ -1330,6 +1336,9 @@ class PNLtracker(DistributionTracker):
                 self.detail[date][ticker]['Px'] = px
                 self.detail[date][ticker]['Lots'] = len(positions)
                 total_exposure += shares * px
+            elif ticker not in self.warned_no_price:
+                self.warned_no_price.add(ticker)
+                warnings.warn(f"No price data for {ticker} on {date.strftime('%Y-%m-%d')}.")
         self.nav[date] = total_exposure
         if not self.pnl[date]:
             self.pnl[date] = .0
